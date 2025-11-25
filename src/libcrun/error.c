@@ -26,14 +26,11 @@
 #include <stdio.h>
 #include "utils.h"
 
-#include <yajl/yajl_tree.h>
-#include <yajl/yajl_gen.h>
+#include <yyjson.h>
 
 #ifdef HAVE_SYSTEMD
 #  include <systemd/sd-journal.h>
 #endif
-
-#define YAJL_STR(x) ((const unsigned char *) (x))
 
 enum
 {
@@ -384,47 +381,48 @@ make_json_error (const char *msg, int errno_, int verbosity)
     case LIBCRUN_VERBOSITY_ERROR:
       level = "error";
       break;
+    default:
+      level = "unknown";
+      break;
     }
-  const unsigned char *buf = NULL;
-  yajl_gen gen = NULL;
+
+  yyjson_mut_doc *doc = NULL;
+  yyjson_mut_val *root = NULL;
   char *ret = NULL;
-  size_t buf_len;
   timestamp_t timestamp = {
     0,
   };
 
-  gen = yajl_gen_alloc (NULL);
-  if (gen == NULL)
+  doc = yyjson_mut_doc_new (NULL);
+  if (doc == NULL)
     return NULL;
+
+  root = yyjson_mut_obj (doc);
+  if (root == NULL)
+    {
+      yyjson_mut_doc_free (doc);
+      return NULL;
+    }
+  yyjson_mut_doc_set_root (doc, root);
 
   get_timestamp (&timestamp, "");
 
-  yajl_gen_map_open (gen);
-
-  yajl_gen_string (gen, YAJL_STR ("msg"), strlen ("msg"));
   if (errno_ == 0)
-    yajl_gen_string (gen, YAJL_STR (msg), strlen (msg));
+    yyjson_mut_obj_add_str (doc, root, "msg", msg);
   else
     {
       cleanup_free char *tmp = NULL;
 
       xasprintf (&tmp, "%s: %s", msg, strerror (errno_));
-      yajl_gen_string (gen, YAJL_STR (tmp), strlen (tmp));
+      yyjson_mut_obj_add_strcpy (doc, root, "msg", tmp);
     }
 
-  yajl_gen_string (gen, YAJL_STR ("level"), strlen ("level"));
-  yajl_gen_string (gen, YAJL_STR (level), strlen (level));
+  yyjson_mut_obj_add_str (doc, root, "level", level);
+  yyjson_mut_obj_add_str (doc, root, "time", timestamp);
 
-  yajl_gen_string (gen, YAJL_STR ("time"), strlen ("time"));
-  yajl_gen_string (gen, YAJL_STR (timestamp), strlen (timestamp));
+  ret = yyjson_mut_write (doc, 0, NULL);
 
-  yajl_gen_map_close (gen);
-
-  yajl_gen_get_buf (gen, &buf, &buf_len);
-  if (buf)
-    ret = strdup ((const char *) buf);
-
-  yajl_gen_free (gen);
+  yyjson_mut_doc_free (doc);
 
   return ret;
 }
@@ -514,35 +512,35 @@ libcrun_set_log_format (const char *format, libcrun_error_t *err)
 }
 
 int
-yajl_error_to_crun_error (int yajl_status, libcrun_error_t *err)
+yyjson_error_to_crun_error (int yyjson_status, libcrun_error_t *err)
 {
-  switch (yajl_status)
+  switch (yyjson_status)
     {
-    case yajl_gen_status_ok:
+    case YYJSON_WRITE_SUCCESS:
       return 0;
 
-    case yajl_gen_keys_must_be_strings:
-      return crun_make_error (err, 0, "generate JSON document: gen keys must be strings");
+    case YYJSON_WRITE_ERROR_INVALID_PARAMETER:
+      return crun_make_error (err, 0, "generate JSON document: invalid parameter");
 
-    case yajl_max_depth_exceeded:
-      return crun_make_error (err, 0, "generate JSON document: max depth exceeded");
+    case YYJSON_WRITE_ERROR_MEMORY_ALLOCATION:
+      return crun_make_error (err, 0, "generate JSON document: memory allocation failed");
 
-    case yajl_gen_in_error_state:
-      return crun_make_error (err, 0, "generate JSON document: complete JSON document generated");
+    case YYJSON_WRITE_ERROR_INVALID_VALUE_TYPE:
+      return crun_make_error (err, 0, "generate JSON document: invalid value type");
 
-    case yajl_gen_generation_complete:
-      return crun_make_error (err, 0, "generate JSON document: called while in error state");
+    case YYJSON_WRITE_ERROR_NAN_OR_INF:
+      return crun_make_error (err, 0, "generate JSON document: NaN or Inf value");
 
-    case yajl_gen_invalid_number:
-      return crun_make_error (err, 0, "generate JSON document: invalid number");
+    case YYJSON_WRITE_ERROR_FILE_OPEN:
+      return crun_make_error (err, 0, "generate JSON document: file open error");
 
-    case yajl_gen_no_buf:
-      return crun_make_error (err, 0, "generate JSON document: no buffer provided");
+    case YYJSON_WRITE_ERROR_FILE_WRITE:
+      return crun_make_error (err, 0, "generate JSON document: file write error");
 
-    case yajl_gen_invalid_string:
+    case YYJSON_WRITE_ERROR_INVALID_STRING:
       return crun_make_error (err, 0, "generate JSON document: invalid string");
 
     default:
-      return crun_make_error (err, 0, "generate JSON document");
+      return crun_make_error (err, 0, "generate JSON document: unknown error");
     }
 }

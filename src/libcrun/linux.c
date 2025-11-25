@@ -70,13 +70,10 @@
 #include <linux/sched.h>
 #include <linux/magic.h>
 
-#include <yajl/yajl_tree.h>
-#include <yajl/yajl_gen.h>
+#include <yyjson.h>
 
 #include "mount_flags.h"
 #include "syscalls.h"
-
-#define YAJL_STR(x) ((const unsigned char *) (x))
 
 #ifndef RLIMIT_RTTIME
 #  define RLIMIT_RTTIME 15
@@ -3720,19 +3717,24 @@ libcrun_get_external_descriptors (libcrun_container_t *container)
 int
 libcrun_save_external_descriptors (libcrun_container_t *container, pid_t pid, libcrun_error_t *err)
 {
-  const unsigned char *buf = NULL;
-  yajl_gen gen = NULL;
+  yyjson_mut_doc *doc = NULL;
+  yyjson_mut_val *arr = NULL;
+  char *json_buf = NULL;
   size_t buf_len;
   int ret;
   int i;
 
-  gen = yajl_gen_alloc (NULL);
-  if (gen == NULL)
-    return crun_make_error (err, errno, "yajl_gen_alloc");
+  doc = yyjson_mut_doc_new (NULL);
+  if (doc == NULL)
+    return crun_make_error (err, errno, "yyjson_mut_doc_new");
 
-  ret = yajl_gen_array_open (gen);
-  if (UNLIKELY (ret != yajl_gen_status_ok))
-    goto yajl_error;
+  arr = yyjson_mut_arr (doc);
+  if (arr == NULL)
+    {
+      yyjson_mut_doc_free (doc);
+      return crun_make_error (err, 0, "yyjson_mut_arr failed");
+    }
+  yyjson_mut_doc_set_root (doc, arr);
 
   /* Remember original stdin, stdout, stderr for container restore.  */
   for (i = 0; i < 3; i++)
@@ -3753,41 +3755,27 @@ libcrun_save_external_descriptors (libcrun_container_t *container, pid_t pid, li
             }
           else
             {
-              yajl_gen_free (gen);
+              yyjson_mut_doc_free (doc);
               return crun_make_error (err, errno, "readlink `%s`", fd_path);
             }
         }
       link_path[ret] = 0;
 
-      ret = yajl_gen_string (gen, YAJL_STR (link_path), ret);
-      if (UNLIKELY (ret != yajl_gen_status_ok))
-        goto yajl_error;
+      yyjson_mut_arr_add_str (doc, arr, link_path);
     }
 
-  ret = yajl_gen_array_close (gen);
-  if (UNLIKELY (ret != yajl_gen_status_ok))
-    goto yajl_error;
-
-  ret = yajl_gen_get_buf (gen, &buf, &buf_len);
-  if (UNLIKELY (ret != yajl_gen_status_ok))
-    goto yajl_error;
-
-  if (buf)
+  json_buf = yyjson_mut_write (doc, 0, &buf_len);
+  if (json_buf == NULL)
     {
-      char *b = xmalloc (buf_len + 1);
-      memcpy (b, buf, buf_len);
-      b[buf_len] = '\0';
-      get_private_data (container)->external_descriptors = b;
+      yyjson_mut_doc_free (doc);
+      return crun_make_error (err, 0, "yyjson_mut_write failed");
     }
 
-  yajl_gen_free (gen);
+  get_private_data (container)->external_descriptors = json_buf;
+
+  yyjson_mut_doc_free (doc);
 
   return 0;
-
-yajl_error:
-  if (gen)
-    yajl_gen_free (gen);
-  return yajl_error_to_crun_error (ret, err);
 }
 
 int

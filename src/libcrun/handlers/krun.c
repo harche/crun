@@ -22,6 +22,7 @@
 #include "../container.h"
 #include "../utils.h"
 #include "../linux.h"
+#include <yyjson.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -96,47 +97,43 @@ libkrun_create_context (void *handle, libcrun_error_t *err)
 }
 
 static int
-libkrun_configure_kernel (uint32_t ctx_id, void *handle, yajl_val *config_tree, libcrun_error_t *err)
+libkrun_configure_kernel (uint32_t ctx_id, void *handle, yyjson_val **config_tree, libcrun_error_t *err)
 {
   int32_t (*krun_set_kernel) (uint32_t ctx_id, const char *kernel_path,
                               uint32_t kernel_format, const char *initrd_path, const char *kernel_cmdline);
-  const char *path_kernel_path[] = { "kernel_path", (const char *) 0 };
-  const char *path_kernel_format[] = { "kernel_format", (const char *) 0 };
-  const char *path_initrd_path[] = { "initrd_path", (const char *) 0 };
-  const char *path_kernel_cmdline[] = { "kernel_cmdline", (const char *) 0 };
-  yajl_val kernel_path = NULL;
-  yajl_val kernel_format = NULL;
-  yajl_val val_initrd_path = NULL;
-  yajl_val val_kernel_cmdline = NULL;
-  char *initrd_path = NULL;
-  char *kernel_cmdline = NULL;
+  yyjson_val *kernel_path = NULL;
+  yyjson_val *kernel_format = NULL;
+  yyjson_val *val_initrd_path = NULL;
+  yyjson_val *val_kernel_cmdline = NULL;
+  const char *initrd_path = NULL;
+  const char *kernel_cmdline = NULL;
   int ret;
 
   /* kernel_path and kernel_format must be present */
-  kernel_path = yajl_tree_get (*config_tree, path_kernel_path, yajl_t_string);
-  if (kernel_path == NULL || ! YAJL_IS_STRING (kernel_path))
+  kernel_path = yyjson_obj_get (*config_tree, "kernel_path");
+  if (kernel_path == NULL || ! yyjson_is_str (kernel_path))
     return 0;
 
-  kernel_format = yajl_tree_get (*config_tree, path_kernel_format, yajl_t_number);
-  if (kernel_format == NULL || ! YAJL_IS_INTEGER (kernel_format))
+  kernel_format = yyjson_obj_get (*config_tree, "kernel_format");
+  if (kernel_format == NULL || ! yyjson_is_int (kernel_format))
     return 0;
 
   /* initrd and kernel_cmdline are optional */
-  val_initrd_path = yajl_tree_get (*config_tree, path_initrd_path, yajl_t_string);
-  if (val_initrd_path != NULL && YAJL_IS_STRING (val_initrd_path))
-    initrd_path = YAJL_GET_STRING (val_initrd_path);
+  val_initrd_path = yyjson_obj_get (*config_tree, "initrd_path");
+  if (val_initrd_path != NULL && yyjson_is_str (val_initrd_path))
+    initrd_path = yyjson_get_str (val_initrd_path);
 
-  val_kernel_cmdline = yajl_tree_get (*config_tree, path_kernel_cmdline, yajl_t_string);
-  if (val_kernel_cmdline != NULL && YAJL_IS_STRING (val_kernel_cmdline))
-    kernel_cmdline = YAJL_GET_STRING (val_kernel_cmdline);
+  val_kernel_cmdline = yyjson_obj_get (*config_tree, "kernel_cmdline");
+  if (val_kernel_cmdline != NULL && yyjson_is_str (val_kernel_cmdline))
+    kernel_cmdline = yyjson_get_str (val_kernel_cmdline);
 
   krun_set_kernel = dlsym (handle, "krun_set_kernel");
   if (krun_set_kernel == NULL)
     return crun_make_error (err, 0, "could not find symbol in krun library");
 
   ret = krun_set_kernel (ctx_id,
-                         YAJL_GET_STRING (kernel_path),
-                         YAJL_GET_INTEGER (kernel_format),
+                         yyjson_get_str (kernel_path),
+                         yyjson_get_int (kernel_format),
                          initrd_path, kernel_cmdline);
 
   if (UNLIKELY (ret < 0))
@@ -150,20 +147,19 @@ libkrun_configure_kernel (uint32_t ctx_id, void *handle, yajl_val *config_tree, 
 #  endif
 
 static int
-libkrun_configure_nitro (uint32_t ctx_id, void *handle, yajl_val *config_tree, libcrun_error_t *err)
+libkrun_configure_nitro (uint32_t ctx_id, void *handle, yyjson_val **config_tree, libcrun_error_t *err)
 {
   int32_t (*krun_nitro_set_image) (uint32_t ctx_id, const char *image_path, uint32_t image_type);
   int32_t (*krun_nitro_set_start_flags) (uint32_t ctx_id, uint64_t start_flags);
-  const char *path_eif[] = { "eif_file", (const char *) 0 };
-  yajl_val val_eif_image = NULL;
-  char *eif_image = NULL;
+  yyjson_val *val_eif_image = NULL;
+  const char *eif_image = NULL;
   int ret;
 
-  val_eif_image = yajl_tree_get (*config_tree, path_eif, yajl_t_string);
-  if (val_eif_image == NULL || ! YAJL_IS_STRING (val_eif_image))
+  val_eif_image = yyjson_obj_get (*config_tree, "eif_file");
+  if (val_eif_image == NULL || ! yyjson_is_str (val_eif_image))
     return crun_make_error (err, 0, "invalid Enclave Image Format file parameter");
 
-  eif_image = YAJL_GET_STRING (val_eif_image);
+  eif_image = yyjson_get_str (val_eif_image);
 
   krun_nitro_set_image = dlsym (handle, "krun_nitro_set_image");
   if (krun_nitro_set_image == NULL)
@@ -203,7 +199,7 @@ libkrun_enable_virtio_gpu (struct krun_config *kconf)
 }
 
 static int
-libkrun_read_vm_config (yajl_val *config_tree, libcrun_error_t *err)
+libkrun_read_vm_config (yyjson_val **config_tree, libcrun_error_t *err)
 {
   int ret;
   cleanup_free char *config = NULL;
@@ -224,13 +220,11 @@ libkrun_read_vm_config (yajl_val *config_tree, libcrun_error_t *err)
 }
 
 static int
-libkrun_configure_vm (uint32_t ctx_id, void *handle, bool *configured, yajl_val *config_tree, libcrun_error_t *err)
+libkrun_configure_vm (uint32_t ctx_id, void *handle, bool *configured, yyjson_val **config_tree, libcrun_error_t *err)
 {
   int32_t (*krun_set_vm_config) (uint32_t ctx_id, uint8_t num_vcpus, uint32_t ram_mib);
-  yajl_val cpus = NULL;
-  yajl_val ram_mib = NULL;
-  const char *path_cpus[] = { "cpus", (const char *) 0 };
-  const char *path_ram_mib[] = { "ram_mib", (const char *) 0 };
+  yyjson_val *cpus = NULL;
+  yyjson_val *ram_mib = NULL;
   int ret;
 
   if (*config_tree == NULL)
@@ -244,10 +238,10 @@ libkrun_configure_vm (uint32_t ctx_id, void *handle, bool *configured, yajl_val 
   if (UNLIKELY (ret))
     return ret;
 
-  cpus = yajl_tree_get (*config_tree, path_cpus, yajl_t_number);
-  ram_mib = yajl_tree_get (*config_tree, path_ram_mib, yajl_t_number);
+  cpus = yyjson_obj_get (*config_tree, "cpus");
+  ram_mib = yyjson_obj_get (*config_tree, "ram_mib");
   /* Both cpus and ram_mib must be present at the same time */
-  if (cpus == NULL || ram_mib == NULL || ! YAJL_IS_INTEGER (cpus) || ! YAJL_IS_INTEGER (ram_mib))
+  if (cpus == NULL || ram_mib == NULL || ! yyjson_is_int (cpus) || ! yyjson_is_int (ram_mib))
     return 0;
 
   krun_set_vm_config = dlsym (handle, "krun_set_vm_config");
@@ -255,7 +249,7 @@ libkrun_configure_vm (uint32_t ctx_id, void *handle, bool *configured, yajl_val 
   if (krun_set_vm_config == NULL)
     return crun_make_error (err, 0, "could not find symbol in the krun library");
 
-  ret = krun_set_vm_config (ctx_id, YAJL_GET_INTEGER (cpus), YAJL_GET_INTEGER (ram_mib));
+  ret = krun_set_vm_config (ctx_id, yyjson_get_int (cpus), yyjson_get_int (ram_mib));
   if (UNLIKELY (ret < 0))
     return crun_make_error (err, -ret, "could not set krun vm configuration");
 
@@ -265,23 +259,22 @@ libkrun_configure_vm (uint32_t ctx_id, void *handle, bool *configured, yajl_val 
 }
 
 static int
-libkrun_configure_flavor (void *cookie, yajl_val *config_tree, libcrun_error_t *err)
+libkrun_configure_flavor (void *cookie, yyjson_val **config_tree, libcrun_error_t *err)
 {
   int ret, sev_indicated = 0, nitro_indicated = 0;
-  const char *path_flavor[] = { "flavor", (const char *) 0 };
   struct krun_config *kconf = (struct krun_config *) cookie;
-  yajl_val val_flavor = NULL;
-  char *flavor = NULL;
+  yyjson_val *val_flavor = NULL;
+  const char *flavor = NULL;
   void *close_handles[2];
 
   close_handles[0] = NULL;
   close_handles[1] = NULL;
 
   // Read if the SEV flavor was indicated in the krun VM config.
-  val_flavor = yajl_tree_get (*config_tree, path_flavor, yajl_t_string);
-  if (val_flavor != NULL && YAJL_IS_STRING (val_flavor))
+  val_flavor = yyjson_obj_get (*config_tree, "flavor");
+  if (val_flavor != NULL && yyjson_is_str (val_flavor))
     {
-      flavor = YAJL_GET_STRING (val_flavor);
+      flavor = yyjson_get_str (val_flavor);
 
       // The SEV flavor will be used if the krun VM config indicates to use SEV
       // within the "flavor" field.
@@ -357,7 +350,7 @@ libkrun_exec (void *cookie, libcrun_container_t *container, const char *pathname
   cpu_set_t set;
   libcrun_error_t err;
   bool configured = false;
-  yajl_val config_tree = NULL;
+  yyjson_val *config_tree = NULL;
 
   ret = libkrun_read_vm_config (&config_tree, &err);
   if (UNLIKELY (ret < 0))
@@ -458,7 +451,7 @@ libkrun_exec (void *cookie, libcrun_container_t *container, const char *pathname
         }
     }
 
-  yajl_tree_free (config_tree);
+  yyjson_tree_free (config_tree);
 
   ret = krun_start_enter (ctx_id);
   return -ret;

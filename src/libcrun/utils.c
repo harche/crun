@@ -51,6 +51,7 @@
 #  define atomic_long volatile long
 #endif
 #include "syscalls.h"
+#include <yyjson.h>
 
 #ifndef CLOSE_RANGE_CLOEXEC
 #  define CLOSE_RANGE_CLOEXEC (1U << 2)
@@ -1883,16 +1884,40 @@ set_blocking_fd (int fd, bool blocking, libcrun_error_t *err)
   return 0;
 }
 
-int
-parse_json_file (yajl_val *out, const char *jsondata, struct parser_context *ctx arg_unused, libcrun_error_t *err)
+/* Global variable to track yyjson document for cleanup */
+static __thread yyjson_doc *last_parsed_doc = NULL;
+
+void
+yyjson_tree_free (yyjson_val *tree arg_unused)
 {
-  char errbuf[1024];
+  if (last_parsed_doc)
+    {
+      yyjson_doc_free (last_parsed_doc);
+      last_parsed_doc = NULL;
+    }
+}
+
+int
+parse_json_file (yyjson_val **out, const char *jsondata, struct parser_context *ctx arg_unused, libcrun_error_t *err)
+{
+  yyjson_doc *doc;
+  yyjson_read_err read_err;
 
   *err = NULL;
 
-  *out = yajl_tree_parse (jsondata, errbuf, sizeof (errbuf));
-  if (*out == NULL)
-    return crun_make_error (err, 0, "cannot parse the data: `%s`", errbuf);
+  /* Free any previously parsed document */
+  if (last_parsed_doc)
+    {
+      yyjson_doc_free (last_parsed_doc);
+      last_parsed_doc = NULL;
+    }
+
+  doc = yyjson_read_opts ((char *) jsondata, strlen (jsondata), 0, NULL, &read_err);
+  if (doc == NULL)
+    return crun_make_error (err, 0, "cannot parse the data: `%s` at position %zu", read_err.msg, read_err.pos);
+
+  last_parsed_doc = doc;
+  *out = yyjson_doc_get_root (doc);
 
   return 0;
 }
